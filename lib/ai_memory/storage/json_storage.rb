@@ -26,7 +26,7 @@ module AiMemory
         
         # Keep only most important memories
         user_data["memories"] = user_data["memories"]
-          .sort_by { |m| [-importance_score(m["importance"]), -Time.parse(m["timestamp"]).to_i] }
+          .sort_by { |m| [-importance_score(m["importance"]), -Time.parse(m["created_at"] || m["timestamp"] || Time.now.iso8601).to_i] }
           .first(@config.max_user_memories)
         
         @service.send(:write_json_file, @service.send(:user_memory_file), user_data)
@@ -101,11 +101,15 @@ module AiMemory
       def filter_memories_by_relevance(memories, query_context)
         return memories if query_context.blank?
         
-        query_keywords = query_context.downcase.split(/\W+/).reject(&:empty?)
+        query_keywords = query_context.to_s.downcase.split(/\W+/).reject(&:empty?)
         return memories if query_keywords.empty?
         
         relevant_memories = memories.select do |memory|
-          content_words = memory["content"].downcase.split(/\W+/)
+          # Handle both string and symbol keys
+          content = memory["content"] || memory[:content]
+          next false if content.nil?
+          
+          content_words = content.to_s.downcase.split(/\W+/)
           (query_keywords & content_words).any?
         end
         
@@ -113,15 +117,23 @@ module AiMemory
       end
       
       def duplicate_memory?(existing_memories, new_memory)
+        new_content = new_memory["content"] || new_memory[:content]
+        return false if new_content.nil?
+        
         existing_memories.any? do |existing|
-          similarity = calculate_similarity(existing["content"], new_memory["content"])
+          existing_content = existing["content"] || existing[:content]
+          next false if existing_content.nil?
+          
+          similarity = calculate_similarity(existing_content, new_content)
           similarity > @config.similarity_threshold
         end
       end
       
       def calculate_similarity(text1, text2)
-        words1 = text1.downcase.split(/\W+/)
-        words2 = text2.downcase.split(/\W+/)
+        return 0 if text1.nil? || text2.nil?
+        
+        words1 = text1.to_s.downcase.split(/\W+/)
+        words2 = text2.to_s.downcase.split(/\W+/)
         
         return 0 if words1.empty? || words2.empty?
         

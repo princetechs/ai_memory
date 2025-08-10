@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'securerandom'
+
 module AiMemory
   class MemoryService < BaseService
     attr_reader :vector_adapter, :extractor, :storage
@@ -20,6 +22,40 @@ module AiMemory
       
       @extraction_cache[conversation_hash] = true
       extract_memories_async(messages, ai_response)
+    end
+    
+    # Store pre-extracted memories directly
+    # @param memories [Array<Hash>] Array of memory objects with content, category, importance, and type
+    def store_memories(memories)
+      return if memories.nil? || memories.empty?
+      
+      user_memories = []
+      session_memories = []
+      
+      memories.each do |memory|
+        # Convert string keys to symbols if needed
+        mem = memory.transform_keys(&:to_sym) if memory.keys.first.is_a?(String)
+        mem ||= memory
+        
+        # Add timestamps and IDs
+        mem[:created_at] = Time.now.iso8601
+        mem[:id] = SecureRandom.uuid
+        
+        if mem[:type].to_s == 'user'
+          user_memories << mem
+        else
+          session_memories << mem
+        end
+      end
+      
+      # Store memories in appropriate storage
+      @storage.store_user_memories(user_memories) if user_memories.any?
+      @storage.store_session_memories(session_memories) if session_memories.any?
+      
+      # Store in vector database if available
+      store_in_vector_db(user_memories + session_memories) if @vector_adapter&.available?
+      
+      log_info("Stored #{user_memories.count} user memories and #{session_memories.count} session memories")
     end
     
     def get_relevant_memories(query: nil, limit: 10, use_vector_search: true)
@@ -166,7 +202,7 @@ module AiMemory
           return if conversation_text.length < 50 || generic_conversation?(conversation_text)
           
           # Extract memories using the configured extractor
-          extracted_memories = @extractor.extract_memories(conversation_text)
+          # extracted_memories = @extractor.extract_memories(conversation_text)
           return if extracted_memories.empty?
           
           # Process and store memories
